@@ -1,0 +1,3 @@
+[client]
+user="{{ zabbix_database_user }}"
+password="{{ mysql_new_zabbix_pass.stdout }}"

@@ -1,0 +1,131 @@
+---
+- name: Set discovered Ansible Python interpreter
+  set_fact:
+    ansible_python_interpreter: "{{ ansible_facts.python.executable }}"    
+    when: ansible_python_interpreter is not defined
+
+- name: Install required python libs
+  apt:
+    name: python3-mysqldb
+    state: present
+
+- name: Download Zabbix repository
+  get_url:
+    url: "{{ zabbix_repo_url }}"
+    dest: /home/{{ansible_user}}/zabbix.deb
+    mode: '0660'
+
+- name: Install Zabbix repository
+  apt:
+    deb: /home/{{ansible_user}}/zabbix.deb
+  
+- name: Update apt cache
+  apt:
+    update_cache: yes
+  changed_when: false
+
+- name: Install Zabbix server, frontend, agent, and database
+  apt:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - mysql-server
+    - zabbix-server-mysql
+    - zabbix-frontend-php
+    - zabbix-nginx-conf
+    - zabbix-agent
+
+- name: Generate new MySql root password
+  command: /usr/bin/openssl rand -hex 32 creates=/root/.my.cnf
+  register: mysql_new_root_pass
+
+- name: Remove anonymous users
+  mysql_user:
+    name: ""
+    state: absent
+  when: mysql_new_root_pass.changed
+
+- name: Remove test database
+  mysql_db:
+    name: test
+    state: absent
+  when: mysql_new_root_pass.changed
+
+- name: Update root password
+  mysql_user:
+    name: root
+    host: "{{ item }}"
+    password: "{{ mysql_new_root_pass.stdout }}"
+  with_items:
+    - "{{ ansible_hostname }}"
+    - 127.0.0.1
+    - ::1
+    - localhost
+  when: mysql_new_root_pass.changed
+
+- name: Create my.cnf
+  template:
+    src: my.cnf
+    dest: /root/.my.cnf
+  when: mysql_new_root_pass.changed
+
+- name: Generate new MySql zabbix password
+  command: /usr/bin/openssl rand -hex 32 creates=/root/.my_zab.cnf
+  register: mysql_new_zabbix_pass
+
+- name: Create Zabbix MySQL database
+  mysql_db:
+    name: "{{ zabbix_database_name }}"
+    state: present
+    encoding: utf8
+    collation: utf8_bin
+    config_file: /root/.my.cnf
+  when: mysql_new_zabbix_pass.changed
+
+- name: Create Zabbix MySQL user
+  mysql_user:
+    name: "{{ zabbix_database_user }}"
+    host: localhost
+    password: "{{ mysql_new_zabbix_pass.stdout }}"
+    priv: "{{ zabbix_database_name }}.*:ALL"
+  when: mysql_new_zabbix_pass.changed
+
+- name: Create my_zab.cnf
+  template:
+    src: my_zab.cnf
+    dest: /root/.my_zab.cnf
+  when: mysql_new_zabbix_pass.changed
+
+- name: Import the initial schema
+  shell: zcat /usr/share/doc/zabbix-server-mysql*/create.sql.gz | mysql -u root "{{ zabbix_database_name }}"
+  when: mysql_new_zabbix_pass.changed
+
+- name: Configure the database for Zabbix server
+  template:
+    src: zabbix_server.conf
+    dest: /etc/zabbix/zabbix_server.conf
+  when: mysql_new_zabbix_pass.changed  
+
+- name: Configure Nginx
+  template:
+    src: nginx.conf
+    dest: /etc/zabbix/nginx.conf
+  when: mysql_new_zabbix_pass.changed
+
+- name: Configure PHP
+  template:
+    src: php-fpm.conf
+    dest: /etc/zabbix/php-fpm.conf
+  when: mysql_new_zabbix_pass.changed
+
+- name: Restart services
+  service:
+    name: "{{ item }}"
+    state: restarted
+    enabled: yes
+  loop:
+    - zabbix-server
+    - zabbix-agent
+    - nginx
+    - php7.2-fpm
+  when: mysql_new_zabbix_pass.changed  
