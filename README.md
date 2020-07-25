@@ -1,5 +1,5 @@
 # Ansible role for Zabbix server
-Ansible role for Zabbix-server
+Ansible role for Zabbix-server for Ubuntu
 
 # Requirements
 No special requirements, note that this role requires root access, so either run with a global become: yes, or invoke the role in your playbook.
